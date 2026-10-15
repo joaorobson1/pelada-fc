@@ -4,11 +4,16 @@ import {configured,db,uid,type Player,type Pelada,type Goal} from './data';
 
 type Member={id:string;name:string;team:number;temporary:boolean};
 type Page='home'|'draw'|'ranking'|'history'|'admin';
-const teams=[{name:'AZUL',color:'#3489ed'},{name:'AMARELO',color:'#f4c543'},{name:'PRETO',color:'#8b9295'}];
-const storeKey='pelada-fc-draw-v1';
-function loadDraw():Member[]{try{const v=JSON.parse(localStorage.getItem(storeKey)||'[]');return Array.isArray(v)?v.filter((x)=>x&&typeof x.id==='string'&&typeof x.name==='string'&&Number.isInteger(x.team)&&x.team>=0&&x.team<=2).slice(0,18):[]}catch{return []}}
+const teams=[{name:'AZUL',color:'#3489ed'},{name:'AMARELO',color:'#f4c543'},{name:'PRETO',color:'#8b9295'},{name:'VERMELHO',color:'#e45454'},{name:'VERDE',color:'#43b581'},{name:'ROXO',color:'#9c70df'},{name:'LARANJA',color:'#f18c39'},{name:'BRANCO',color:'#d9dee6'},{name:'ROSA',color:'#ed76b4'},{name:'CIANO',color:'#40c6d8'}];
+const PLAYERS_PER_TEAM=5;
+const INITIAL_TEAMS=3;
+const MAX_PLAYERS=teams.length*PLAYERS_PER_TEAM;
+const teamCount=(total:number)=>Math.min(teams.length,Math.max(INITIAL_TEAMS,Math.ceil(total/PLAYERS_PER_TEAM)));
+const storeKey='pelada-fc-draw-v2';
+function loadDraw():Member[]{try{const v=JSON.parse(localStorage.getItem(storeKey)||'[]');return Array.isArray(v)?v.filter((x)=>x&&typeof x.id==='string'&&typeof x.name==='string'&&Number.isInteger(x.team)&&x.team>=0&&x.team<teams.length).slice(0,MAX_PLAYERS):[]}catch{return []}}
 const dateLocal=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 const fmt=(date:string)=>date.split('-').reverse().join('/');
+
 export default function App(){
  const [page,setPage]=useState<Page>('home');
  const [players,setPlayers]=useState<Player[]>([]);
@@ -23,12 +28,95 @@ export default function App(){
  const [editId,setEditId]=useState<string|null>(null);
  const [activeAdmin,setActiveAdmin]=useState<'results'|'players'>('results');
  const count=members.length;
+ const visibleTeamCount = Math.min(
+  teams.length,
+  Math.max(
+    INITIAL_TEAMS,
+    teamCount(count),
+    ...members.map(m => m.team + 1)
+  )
+);
+
+const capacity = visibleTeamCount * PLAYERS_PER_TEAM;
  const sums=useMemo(()=>players.map(p=>({...p,total:goals.filter(g=>g.player_id===p.id).reduce((a,g)=>a+g.quantity,0),matches:new Set(goals.filter(g=>g.player_id===p.id).map(g=>g.pelada_id)).size})).sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name,'pt-BR')),[players,goals]);
  async function refresh(){if(!db)return;const [a,b,c]=await Promise.all([db.from('players').select('*').order('name'),db.from('peladas').select('*').order('played_on',{ascending:false}),db.from('goals').select('*')]);if(a.error||b.error||c.error){setNotice(a.error?.message||b.error?.message||c.error?.message||'Erro ao carregar dados');return}setPlayers(a.data as Player[]);setPeladas(b.data as Pelada[]);setGoals(c.data as Goal[])}
  useEffect(()=>{if(!db)return;refresh();db.auth.getSession().then(({data})=>setSession(Boolean(data.session)));const {data:{subscription}}=db.auth.onAuthStateChange((_event,s)=>setSession(Boolean(s)));return()=>subscription.unsubscribe()},[]);
  useEffect(()=>localStorage.setItem(storeKey,JSON.stringify(members)),[members]);
  function message(t:string){setNotice(t)}
- function addPlayerToDraw(){const found=players.find(p=>p.id===selected);const name=(found?.nickname||found?.name||guestName).trim();if(!name)return message('Selecione um jogador ou informe o nome do convidado.');if(count>=18)return message('Os três times já estão completos.');if(members.some(m=>(found?m.id===found.id:m.name.toLocaleLowerCase('pt-BR')===name.toLocaleLowerCase('pt-BR'))))return message('Este jogador já está no sorteio.');const available=teams.map((_,i)=>i).filter(i=>members.filter(m=>m.team===i).length<6);const team=available[Math.floor(Math.random()*available.length)];const next={id:found?.id||uid(),name,team,temporary:!found};setMembers(v=>[...v,next]);setLast(next);setSelected('');setGuestName('');setNotice('')}
+  function addPlayerToDraw() {
+  const found = players.find(p => p.id === selected);
+
+  const name = (
+    found?.nickname ||
+    found?.name ||
+    guestName
+  ).trim();
+
+  if (!name) {
+    return message(
+      'Selecione um jogador ou informe o nome do convidado.'
+    );
+  }
+
+  if (members.length >= MAX_PLAYERS) {
+    return message('Todos os times estão completos.');
+  }
+
+  const jaExiste = members.some(m =>
+    found
+      ? m.id === found.id
+      : m.name.toLocaleLowerCase('pt-BR') ===
+        name.toLocaleLowerCase('pt-BR')
+  );
+
+  if (jaExiste) {
+    return message('Este jogador já está no sorteio.');
+  }
+
+  const timesOcupados = members.length
+    ? Math.max(...members.map(m => m.team)) + 1
+    : INITIAL_TEAMS;
+
+  const quantidadeTimes = Math.max(
+    INITIAL_TEAMS,
+    timesOcupados
+  );
+
+  let disponiveis = Array.from(
+    { length: quantidadeTimes },
+    (_, i) => i
+  ).filter(i =>
+    members.filter(m => m.team === i).length <
+    PLAYERS_PER_TEAM
+  );
+
+  if (disponiveis.length === 0) {
+    if (quantidadeTimes >= teams.length) {
+      return message('Limite de times atingido.');
+    }
+
+    disponiveis = [quantidadeTimes];
+  }
+
+  const indiceAleatorio = Math.floor(
+    Math.random() * disponiveis.length
+  );
+
+  const team = disponiveis[indiceAleatorio];
+
+  const next: Member = {
+    id: found?.id || uid(),
+    name,
+    team,
+    temporary: !found
+  };
+
+  setMembers(prev => [...prev, next]);
+  setLast(next);
+  setSelected('');
+  setGuestName('');
+  setNotice('');
+}
  function reset(){if(window.confirm('Reiniciar este sorteio?')){setMembers([]);setLast(null);setNotice('')}}
  async function login(e:React.FormEvent){e.preventDefault();if(!db)return;setBusy(true);const {error}=await db.auth.signInWithPassword({email,password});setBusy(false);if(error)message('Não foi possível entrar. Verifique suas credenciais.');else{setPassword('');setNotice('')}}
  async function savePlayer(e:React.FormEvent){e.preventDefault();if(!db||!session)return;const name=playerName.trim();if(!name)return;setBusy(true);const {error}=await db.from('players').insert({name,nickname:nickname.trim()||null,type:playerType});setBusy(false);if(error)message(error.message);else{setPlayerName('');setNickname('');await refresh();message('Jogador cadastrado.')}}
@@ -38,12 +126,14 @@ export default function App(){
  async function deletePelada(p:Pelada){if(!db||!session||!window.confirm(`Excluir a pelada de ${fmt(p.played_on)} e todos os gols registrados?`))return;const {error}=await db.from('peladas').delete().eq('id',p.id);if(error)message(error.message);else{await refresh();message('Pelada excluída.')}}
  function navigate(p:Page){setPage(p);setNotice('');window.scrollTo(0,0)}
  return <div className="app"><header className="topbar"><button className="brand" onClick={()=>navigate('home')}><span className="brand-icon">P<span>.</span></span><span>PELADA<span className="brand-light">FC</span></span></button><span className="top-caption">FUTEBOL ENTRE AMIGOS</span></header><main>
- {page==='home'&&<><section className="hero"><span className="eyebrow">A NOSSA PELADA, A NOSSA RESENHA.</span><h1>PELADINHA<br/><em>DO FUFU.</em></h1><p>Monte os times, acompanhe a artilharia e mantenha a história da resenha viva.</p><button className="primary hero-btn" onClick={()=>navigate('draw')}>COMEÇAR SORTEIO <ArrowRight size={19}/></button><div className="hero-decoration">18<span>JOGADORES</span></div></section><div className="section-label">EXPLORE O APLICATIVO <span>01 — 04</span></div><div className="menu-grid">{[{p:'draw' as Page,n:'01',title:'SORTEAR TIMES',sub:'Três equipes. Seis por lado.',icon:<Shuffle/>},{p:'ranking' as Page,n:'02',title:'ARTILHARIA',sub:'Quem manda a bola pra rede?',icon:<Trophy/>},{p:'history' as Page,n:'03',title:'HISTÓRICO',sub:'Cada rodada fica registrada.',icon:<CalendarDays/>},{p:'admin' as Page,n:'04',title:'ADMINISTRAÇÃO',sub:'Jogadores e resultados.',icon:<LockKeyhole/>}].map(item=><button className="menu-tile" key={item.p} onClick={()=>navigate(item.p)}><div className="tile-top"><span>{item.n} /</span>{item.icon}</div><div><h2>{item.title}</h2><p>{item.sub}</p></div><ChevronRight className="tile-arrow" size={19}/></button>)}</div></>}
- {page!=='home'&&<><button className="back" onClick={()=>navigate('home')}><ArrowLeft size={16}/> VOLTAR AO INÍCIO</button><div className="page-heading"><span className="eyebrow">PELADA FC / {page==='draw'?'SORTEIO':page==='ranking'?'ARTILHARIA':page==='history'?'HISTÓRICO':'ADMIN'}</span><h1>{page==='draw'?'SORTEIO DE TIMES':page==='ranking'?'OS ARTILHEIROS':page==='history'?'NOSSA HISTÓRIA':'ÁREA DO ADMIN'}</h1><p>{page==='draw'?'18 jogadores. 3 times. A sorte decide.':page==='ranking'?'Os gols de todas as peladas, em um só lugar.':page==='history'?'Confira os resultados registrados.':'Gerencie os jogadores e os gols.'}</p></div></>}
- {page==='draw'&&<><div className="draw-layout"><section className="panel"><div className="panel-title"><span>ADICIONAR JOGADOR</span><strong>{count.toString().padStart(2,'0')} <small>/ 18</small></strong></div><div className="progress"><div style={{width:`${count/18*100}%`}}/></div><label>JOGADOR CADASTRADO</label><select value={selected} disabled={count===18} onChange={e=>{setSelected(e.target.value);if(e.target.value)setGuestName('')}}><option value="">Selecione um jogador...</option>{players.filter(p=>!members.some(m=>m.id===p.id)).map(p=><option key={p.id} value={p.id}>{p.nickname||p.name} {p.type==='guest'?'(convidado)':''}</option>)}</select><div className="or">OU ADICIONE UM CONVIDADO</div><label>NOME DO CONVIDADO</label><input value={guestName} disabled={count===18} maxLength={60} placeholder="Ex.: Rafael" onChange={e=>{setGuestName(e.target.value);if(e.target.value)setSelected('')}} onKeyDown={e=>{if(e.key==='Enter')addPlayerToDraw()}}/><button className="primary wide" onClick={addPlayerToDraw} disabled={count===18||(!selected&&!guestName.trim())}><Shuffle size={17}/> SORTEAR JOGADOR</button>{last&&<div className="reveal"><span>ÚLTIMO SORTEADO</span><strong>{last.name}</strong><div style={{color:teams[last.team].color}}>● TIME {teams[last.team].name}</div></div>}<button className="text-button" onClick={reset}><RotateCcw size={15}/> REINICIAR SORTEIO</button></section><section className="teams">{teams.map((team,i)=><div className="team" key={team.name}><div className="team-header"><span className="team-dot" style={{background:team.color}}/><strong>TIME {team.name}</strong><span>{members.filter(m=>m.team===i).length}/6</span></div><div className="team-players">{members.filter(m=>m.team===i).map((m,j)=><div className="team-player" key={m.id}><span>{String(j+1).padStart(2,'0')}</span>{m.name}{m.temporary&&<small>CONVIDADO</small>}</div>)}{Array.from({length:6-members.filter(m=>m.team===i).length},(_,j)=><div className="empty-slot" key={j}>— AGUARDANDO JOGADOR</div>)}</div></div>)}</section></div>{count===18&&<div className="complete"><Check size={20}/> TIMES COMPLETOS! BOA PELADA.</div>}<p className="hint">Os convidados inseridos aqui participam apenas deste sorteio. Para adicioná-los à artilharia oficial, o administrador deve cadastrá-los.</p></>}
+ {page==='home'&&<><section className="hero"><span className="eyebrow">A NOSSA PELADA, A NOSSA RESENHA.</span><h1>PELADINHA<br/><em>DO FUFU.</em></h1><p>Monte os times, acompanhe a artilharia e mantenha a história da resenha viva.</p><button className="primary hero-btn" onClick={()=>navigate('draw')}>COMEÇAR SORTEIO <ArrowRight size={19}/></button><div className="hero-decoration">5<span>POR TIME + GOLEIRO</span></div></section><div className="section-label">EXPLORE O APLICATIVO <span>01 — 04</span></div><div className="menu-grid">{[{p:'draw' as Page,n:'01',title:'SORTEAR TIMES',sub:'Cinco sorteados por time. Goleiro fixo.',icon:<Shuffle/>},{p:'ranking' as Page,n:'02',title:'ARTILHARIA',sub:'Quem manda a bola pra rede?',icon:<Trophy/>},{p:'history' as Page,n:'03',title:'HISTÓRICO',sub:'Cada rodada fica registrada.',icon:<CalendarDays/>},{p:'admin' as Page,n:'04',title:'ADMINISTRAÇÃO',sub:'Jogadores e resultados.',icon:<LockKeyhole/>}].map(item=><button className="menu-tile" key={item.p} onClick={()=>navigate(item.p)}><div className="tile-top"><span>{item.n} /</span>{item.icon}</div><div><h2>{item.title}</h2><p>{item.sub}</p></div><ChevronRight className="tile-arrow" size={19}/></button>)}</div></>}
+ {page!=='home'&&<><button className="back" onClick={()=>navigate('home')}><ArrowLeft size={16}/> VOLTAR AO INÍCIO</button><div className="page-heading"><span className="eyebrow">PELADA FC / {page==='draw'?'SORTEIO':page==='ranking'?'ARTILHARIA':page==='history'?'HISTÓRICO':'ADMIN'}</span><h1>{page==='draw'?'SORTEIO DE TIMES':page==='ranking'?'OS ARTILHEIROS':page==='history'?'NOSSA HISTÓRIA':'ÁREA DO ADMIN'}</h1><p>{page==='draw'?'5 jogadores por time, além do goleiro fixo. Mais times quando precisar.':page==='ranking'?'Os gols de todas as peladas, em um só lugar.':page==='history'?'Confira os resultados registrados.':'Gerencie os jogadores e os gols.'}</p></div></>}
+ {page==='draw'&&<><div className="draw-layout"><section className="panel"><div className="panel-title"><span>ADICIONAR JOGADOR</span><strong>{count.toString().padStart(2,'0')} <small>/ {capacity}</small></strong></div><div className="progress"><div style={{width:`${count/capacity*100}%`}}/></div><label>JOGADOR CADASTRADO</label><select value={selected} disabled={count>=MAX_PLAYERS} onChange={e=>{setSelected(e.target.value);if(e.target.value)setGuestName('')}}><option value="">Selecione um jogador...</option>{players.filter(p=>!members.some(m=>m.id===p.id)).map(p=><option key={p.id} value={p.id}>{p.nickname||p.name} {p.type==='guest'?'(convidado)':''}</option>)}</select><div className="or">OU ADICIONE UM CONVIDADO</div><label>NOME DO CONVIDADO</label><input value={guestName} disabled={count>=MAX_PLAYERS} maxLength={60} placeholder="Ex.: Rafael" onChange={e=>{setGuestName(e.target.value);if(e.target.value)setSelected('')}} onKeyDown={e=>{if(e.key==='Enter')addPlayerToDraw()}}/><button className="primary wide" onClick={addPlayerToDraw} disabled={count>=MAX_PLAYERS||(!selected&&!guestName.trim())}><Shuffle size={17}/> SORTEAR JOGADOR</button>{last&&<div className="reveal"><span>ÚLTIMO SORTEADO</span><strong>{last.name}</strong><div style={{color:teams[last.team].color}}>● TIME {teams[last.team].name}</div></div>}<button className="text-button" onClick={reset}><RotateCcw size={15}/> REINICIAR SORTEIO</button></section><section className="teams">{teams.slice(0,visibleTeamCount).map((team,i)=><div className="team" key={team.name}><div className="team-header"><span className="team-dot" style={{background:team.color}}/><strong>TIME {team.name}</strong><span>{members.filter(m=>m.team===i).length}/{PLAYERS_PER_TEAM}</span></div><div className="team-players">{members.filter(m=>m.team===i).map((m,j)=><div className="team-player" key={m.id}><span>{String(j+1).padStart(2,'0')}</span>{m.name}{m.temporary&&<small>CONVIDADO</small>}</div>)}{Array.from({length:Math.max(0,PLAYERS_PER_TEAM-members.filter(m=>m.team===i).length)},(_,j)=><div className="empty-slot" key={j}>— AGUARDANDO JOGADOR</div>)}</div></div>)}</section></div>{count >= INITIAL_TEAMS * PLAYERS_PER_TEAM &&
+members.every(
+  m => members.filter(p => p.team === m.team).length === PLAYERS_PER_TEAM
+)&&<div className="complete"><Check size={20}/> {visibleTeamCount} TIMES COMPLETOS! {count<MAX_PLAYERS?"VOCÊ PODE CONTINUAR O SORTEIO.":"BOA PELADA."}</div>}<p className="hint">Cada time recebe 5 jogadores sorteados; o goleiro é fixo e não participa do sorteio. Os convidados inseridos aqui participam apenas deste sorteio. Para adicioná-los à artilharia oficial, o administrador deve cadastrá-los.</p></>}
  {page==='ranking'&&<section className="panel"><div className="panel-title"><span>CLASSIFICAÇÃO GERAL</span><Trophy size={19}/></div>{!configured?<div className="empty">Conecte o Supabase para carregar a artilharia oficial.</div>:sums.length===0?<div className="empty">Nenhum jogador cadastrado ainda.</div>:<div className="ranking">{sums.map((p,i)=><div className="rank-row" key={p.id}><span className="rank-pos">{String(i+1).padStart(2,'0')}</span><div className="rank-person"><strong>{p.nickname||p.name}</strong><small>{p.type==='fixed'?'JOGADOR FIXO':'CONVIDADO'}</small></div><div className="rank-total"><strong>{p.total}</strong><small>GOLS</small></div></div>)}</div>}</section>}
  {page==='history'&&<section className="panel"><div className="panel-title"><span>PARTIDAS REGISTRADAS</span><CalendarDays size={19}/></div>{!configured?<div className="empty">Conecte o Supabase para consultar o histórico.</div>:peladas.length===0?<div className="empty">Nenhuma pelada registrada até agora.</div>:peladas.map(p=><div className="history-item" key={p.id}><div><strong>{fmt(p.played_on)}</strong><small>{goals.filter(g=>g.pelada_id===p.id).reduce((a,g)=>a+g.quantity,0)} GOLS REGISTRADOS</small></div><div className="history-goals">{goals.filter(g=>g.pelada_id===p.id&&g.quantity>0).sort((a,b)=>b.quantity-a.quantity).map(g=><span key={g.id}>{players.find(pl=>pl.id===g.player_id)?.nickname||players.find(pl=>pl.id===g.player_id)?.name||'Jogador'} · {g.quantity}</span>)}</div></div>)}</section>}
  {page==='admin'&&(!configured?<div className="panel empty">Para ativar a administração, configure as variáveis do Supabase no arquivo <code>.env</code> e execute o SQL fornecido no projeto.</div>:!session?<form className="panel login" onSubmit={login}><LockKeyhole size={28}/><h2>ACESSO RESTRITO</h2><p>Entre com a conta de administrador criada no Supabase.</p><label>E-MAIL</label><input type="email" required value={email} onChange={e=>setEmail(e.target.value)}/><label>SENHA</label><input type="password" required value={password} onChange={e=>setPassword(e.target.value)}/><button className="primary wide" disabled={busy}>ENTRAR <ArrowRight size={17}/></button></form>:<><div className="admin-nav"><button className={activeAdmin==='results'?'active':''} onClick={()=>setActiveAdmin('results')}><Trophy size={17}/> RESULTADOS</button><button className={activeAdmin==='players'?'active':''} onClick={()=>setActiveAdmin('players')}><Users size={17}/> JOGADORES</button><button className="logout" onClick={()=>db?.auth.signOut()}><LogOut size={17}/> SAIR</button></div>{activeAdmin==='players'?<div className="admin-columns"><form className="panel" onSubmit={savePlayer}><div className="panel-title">CADASTRAR JOGADOR</div><label>NOME COMPLETO</label><input required maxLength={100} value={playerName} onChange={e=>setPlayerName(e.target.value)}/><label>APELIDO (OPCIONAL)</label><input maxLength={60} value={nickname} onChange={e=>setNickname(e.target.value)}/><label>TIPO</label><select value={playerType} onChange={e=>setPlayerType(e.target.value as 'fixed'|'guest')}><option value="fixed">Fixo</option><option value="guest">Convidado</option></select><button className="primary wide" disabled={busy}><Plus size={17}/> CADASTRAR</button></form><section className="panel"><div className="panel-title">JOGADORES CADASTRADOS</div>{players.map(p=><div className="player-admin" key={p.id}><div><strong>{p.nickname||p.name}</strong><small>{p.name}</small></div><button onClick={()=>changeType(p)} title="Alternar entre fixo e convidado">{p.type==='fixed'?'FIXO':'CONVIDADO'} <RotateCcw size={13}/></button></div>)}</section></div>:<div className="admin-columns"><form className="panel" onSubmit={saveResults}><div className="panel-title">{editId?'EDITAR RESULTADO':'NOVA PELADA'}</div><label>DATA DA PELADA</label><input type="date" required value={playedOn} onChange={e=>setPlayedOn(e.target.value)}/><div className="scores-heading">GOLS POR JOGADOR <span>DEIXE EM BRANCO SE NÃO PARTICIPOU</span></div>{players.length===0?<p className="empty">Cadastre jogadores antes de registrar gols.</p>:players.map(p=><div className="score-row" key={p.id}><span>{p.nickname||p.name}<small>{p.type==='fixed'?'FIXO':'CONVIDADO'}</small></span><input type="number" min="0" max="999" placeholder="—" value={scores[p.id]??''} onChange={e=>setScores(v=>{const next={...v};if(e.target.value==='')delete next[p.id];else next[p.id]=Number(e.target.value);return next})}/></div>)}<button className="primary wide" disabled={busy||players.length===0}><Check size={17}/> {editId?'SALVAR ALTERAÇÕES':'REGISTRAR GOLS'}</button>{editId&&<button type="button" className="text-button" onClick={()=>{setEditId(null);setScores({});setPlayedOn(dateLocal())}}><X size={15}/> CANCELAR EDIÇÃO</button>}</form><section className="panel"><div className="panel-title">EDIÇÕES ANTERIORES</div>{peladas.length===0?<div className="empty">Nenhuma pelada registrada.</div>:peladas.map(p=><div className="past-item" key={p.id}><div><strong>{fmt(p.played_on)}</strong><small>{goals.filter(g=>g.pelada_id===p.id).reduce((a,g)=>a+g.quantity,0)} GOLS</small></div><div><button onClick={()=>editPelada(p)}>EDITAR</button><button className="danger" onClick={()=>deletePelada(p)}>EXCLUIR</button></div></div>)}</section></div>}</>)}
  {notice&&<div className="toast" role="status"><span>{notice}</span><button onClick={()=>setNotice('')} aria-label="Fechar"><X size={16}/></button></div>}
- </main><footer><span>PELADA FC © {new Date().getFullYear()}</span><span>FEITO PRA QUEM NÃO FOGE DO JOGO.</span></footer></div>
-}
+ </main><footer><span>PELADA FC © {new Date().getFullYear()}</span><span>FEITO PRA QUEM NÃO FOGE DO JOGO.</span></footer></div>}
